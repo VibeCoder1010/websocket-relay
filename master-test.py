@@ -2,14 +2,16 @@ import asyncio
 import os
 import threading
 
+import dotenv
 import websockets
-from dotenv import load_dotenv
 
-load_dotenv()
+dotenv.load_dotenv()
+
+WS_URL = os.getenv("WS_HOST", "ws://localhost:8000")
 
 
 async def master(slave_id: str):
-    uri = f"ws://localhost:8000/master?slave_id={slave_id}&token={os.environ['AUTH_TOKEN']}"
+    uri = f"{WS_URL}/ws/master?slave_id={slave_id}&token={os.environ['AUTH_TOKEN']}"
     async with websockets.connect(uri) as websocket:
         print(f"Connected to slave: {slave_id}")
 

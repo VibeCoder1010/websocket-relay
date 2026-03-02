@@ -104,7 +104,7 @@ async def heartbeat_task():
             await manager.disconnect_slave(slave_id)
 
 
-@app.websocket("/slave")
+@app.websocket("/ws/slave")
 async def slave_endpoint(websocket: WebSocket):
     slave_id = await manager.connect_slave(websocket)
     await websocket.send_text(slave_id)
@@ -118,7 +118,7 @@ async def slave_endpoint(websocket: WebSocket):
         await manager.disconnect_slave(slave_id)
 
 
-@app.websocket("/master")
+@app.websocket("/ws/master")
 async def master_endpoint(
     websocket: WebSocket, slave_id: str | None = None, token: str | None = None
 ):
@@ -146,12 +146,22 @@ async def master_endpoint(
         await manager.disconnect_master(websocket)
 
 
-@app.get("/slaves")
+@app.get("/api/slaves")
 async def list_slaves(token: str = Depends(verify_auth_token)):
     return JSONResponse({"slaves": manager.get_slaves()})
 
 
-@app.get("/health")
+@app.post("/api/slaves/{slave_id}/kick")
+async def kick_slave(slave_id: str, token: str = Depends(verify_auth_token)):
+    if slave_id not in manager.slaves:
+        raise HTTPException(status_code=404, detail="Slave not found")
+    ws = manager.slaves[slave_id]
+    await ws.close()
+    await manager.disconnect_slave(slave_id)
+    return JSONResponse({"status": "kicked"})
+
+
+@app.get("/api/health")
 async def health():
     return JSONResponse({"status": "healthy"})
 
