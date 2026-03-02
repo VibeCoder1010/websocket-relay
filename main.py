@@ -151,6 +151,11 @@ async def list_slaves(token: str = Depends(verify_auth_token)):
     return JSONResponse({"slaves": manager.get_slaves()})
 
 
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "healthy"})
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)
