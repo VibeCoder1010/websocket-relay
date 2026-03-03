@@ -5,21 +5,34 @@ from contextlib import asynccontextmanager
 
 import dotenv
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordBearer
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import HTMLResponse, JSONResponse
+from itsdangerous import URLSafeTimedSerializer
 
 dotenv.load_dotenv()
 
 DEBUG = False
+DEVELOPMENT = os.environ.get("DEVELOPMENT", "0") == "1"
+
+SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+ph = PasswordHasher()
 
 
 def debug_print(*args, **kwargs):
     if DEBUG:
         print(*args, **kwargs)
-
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 class ConnectionManager:
@@ -73,15 +86,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-def verify_auth_token(token: str = Depends(oauth2_scheme)) -> str:
-    expected = os.environ.get("AUTH_TOKEN")
-    if not expected:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not secrets.compare_digest(token, expected):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    return token
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(heartbeat_task())
@@ -127,7 +131,13 @@ async def master_endpoint(
         return
 
     token = websocket.query_params.get("token")
-    if not token or not verify_auth_token(token):
+    if not token:
+        await websocket.close(code=4001)
+        return
+
+    try:
+        serializer.loads(token, max_age=3600)
+    except Exception:
         await websocket.close(code=4001)
         return
 
@@ -146,13 +156,61 @@ async def master_endpoint(
         await manager.disconnect_master(websocket)
 
 
-@app.get("/api/slaves")
-async def list_slaves(token: str = Depends(verify_auth_token)):
+def get_session(request: Request) -> bool:
+    token = request.cookies.get("session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        serializer.loads(token, max_age=3600)
+        return True
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+
+protected = APIRouter(dependencies=[Depends(get_session)])
+
+
+@app.post("/api/login")
+async def login(request: Request):
+    body = await request.json()
+    token = body.get("token")
+
+    hashed_token = os.environ.get("AUTH_TOKEN")
+    if not hashed_token:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    try:
+        ph.verify(hashed_token, token)
+    except VerifyMismatchError:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    session_token = serializer.dumps("1")
+    response = JSONResponse({"status": "ok"})
+    response.set_cookie(
+        "session",
+        session_token,
+        httponly=True,
+        secure=not DEVELOPMENT,
+        samesite="strict",
+        max_age=3600,
+    )
+    return response
+
+
+@app.post("/api/logout")
+async def logout():
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie("session")
+    return response
+
+
+@protected.get("/api/slaves")
+async def list_slaves():
     return JSONResponse({"slaves": manager.get_slaves()})
 
 
-@app.post("/api/slaves/{slave_id}/kick")
-async def kick_slave(slave_id: str, token: str = Depends(verify_auth_token)):
+@protected.post("/api/slaves/{slave_id}/kick")
+async def kick_slave(slave_id: str):
     if slave_id not in manager.slaves:
         raise HTTPException(status_code=404, detail="Slave not found")
     ws = manager.slaves[slave_id]
@@ -161,9 +219,140 @@ async def kick_slave(slave_id: str, token: str = Depends(verify_auth_token)):
     return JSONResponse({"status": "kicked"})
 
 
+app.include_router(protected)
+
+
 @app.get("/api/health")
 async def health():
     return JSONResponse({"status": "healthy"})
+
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Relay - Login</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 400px; margin: 100px auto; padding: 20px; text-align: center; }
+        input { padding: 10px; width: 100%; margin-bottom: 10px; box-sizing: border-box; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .error { color: red; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Relay Admin</h1>
+    <p>Enter your authentication token:</p>
+    <input type="password" id="token" placeholder="Auth Token">
+    <button onclick="login()">Login</button>
+    <p id="error" class="error"></p>
+    <script>
+        async function checkAuth() {
+            try {
+                const resp = await fetch('/api/slaves');
+                if (resp.ok) {
+                    window.location.href = '/dashboard';
+                }
+            } catch (e) {}
+        }
+        checkAuth();
+
+        async function login() {
+            const authToken = document.getElementById('token').value;
+            try {
+                const resp = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: authToken })
+                });
+                if (resp.ok) {
+                    window.location.href = '/dashboard';
+                } else {
+                    document.getElementById('error').textContent = 'Invalid token';
+                }
+            } catch (e) {
+                document.getElementById('error').textContent = 'Connection error';
+            }
+        }
+    </script>
+</body>
+</html>"""
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Relay - Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        input { padding: 10px; width: 100%; margin-bottom: 10px; box-sizing: border-box; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; margin-right: 5px; }
+        button:hover { background: #0056b3; }
+        .logout { background: #6c757d; }
+        .logout:hover { background: #545b62; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
+        th { background: #f5f5f5; }
+        .kick { background: #dc3545; }
+        .kick:hover { background: #c82333; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Relay Dashboard</h1>
+    <div>
+        <button onclick="loadSlaves()">Refresh</button>
+        <button class="logout" onclick="logout()">Logout</button>
+    </div>
+    <h2>Connected Slaves</h2>
+    <table id="slaves">
+        <thead><tr><th>Slave ID</th><th>Action</th></tr></thead>
+        <tbody></tbody>
+    </table>
+    <script>
+        async function loadSlaves() {
+            try {
+                const resp = await fetch('/api/slaves');
+                if (resp.status === 401) {
+                    window.location.href = '/';
+                    return;
+                }
+                const data = await resp.json();
+                const tbody = document.querySelector('#slaves tbody');
+                tbody.innerHTML = '';
+                for (const slave of data.slaves) {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${slave}</td><td><button class="kick" onclick="kick('${slave}')">Kick</button></td>`;
+                    tbody.appendChild(tr);
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function kick(slaveId) {
+            if (!confirm('Kick slave ' + slaveId + '?')) return;
+            await fetch('/api/slaves/' + slaveId + '/kick', { method: 'POST' });
+            loadSlaves();
+        }
+
+        async function logout() {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/';
+        }
+
+        loadSlaves();
+    </script>
+</body>
+</html>"""
+
+
+@app.get("/")
+async def index():
+    return HTMLResponse(LOGIN_HTML)
+
+
+@app.get("/dashboard")
+async def dashboard(request: Request):
+    get_session(request)
+    return HTMLResponse(DASHBOARD_HTML)
 
 
 if __name__ == "__main__":
