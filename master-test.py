@@ -27,8 +27,10 @@ async def login(token: str) -> str:
 
 
 async def master(slave_id: str, session_token: str):
+    # TODO: Remove token param when go server is complete.
     uri = f"{WS_URL}/ws/master?slave_id={slave_id}&token={session_token}"
-    async with websockets.connect(uri) as websocket:
+    headers = {"Cookie": f"session={session_token}"}
+    async with websockets.connect(uri, additional_headers=headers) as websocket:
         print(f"Connected to slave: {slave_id}")
 
         async def receive_messages():
