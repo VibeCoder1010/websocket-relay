@@ -181,6 +181,7 @@ func main() {
 	mux.HandleFunc("GET /ws/master", server.authMiddleware(server.handleMaster))
 
 	// Admin API
+	mux.HandleFunc("GET /api/health", server.handleHealth)
 	mux.HandleFunc("POST /api/login", server.handleLogin)
 	mux.HandleFunc("POST /api/logout", server.handleLogout)
 	mux.HandleFunc("GET /api/slaves", server.authMiddleware(server.handleListSlaves))
@@ -296,6 +297,11 @@ func (server *WebServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc 
 }
 
 // --- API ---
+
+func (server *WebServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"healthy"}`))
+}
 
 func (server *WebServer) handleListSlaves(w http.ResponseWriter, r *http.Request) {
 	var ids []string
