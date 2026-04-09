@@ -1,6 +1,6 @@
 module websocket-relay
 
-go 1.26.1
+go 1.26.0
 
 require (
 	github.com/gorilla/securecookie v1.1.2
