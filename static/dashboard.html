@@ -69,7 +69,7 @@
 <body>
 	<h1>WebSocket Relay Dashboard</h1>
 	<div>
-		<button onclick="loadSlaves()">Refresh</button>
+		<button onclick="loadSlaves(); loadLogs();">Refresh</button>
 		<button class="logout" onclick="logout()">Logout</button>
 	</div>
 	<h2>Connected Slaves</h2>
@@ -82,7 +82,23 @@
 		</thead>
 		<tbody></tbody>
 	</table>
+
+	<h2>Connection Logs</h2>
+	<table id="logs">
+		<thead>
+			<tr>
+				<th>Slave ID</th>
+				<th>Connected At</th>
+				<th>Disconnected At</th>
+			</tr>
+		</thead>
+		<tbody></tbody>
+	</table>
 	<script>
+		function formatTime(isoString) {
+			return new Date(isoString).toLocaleString();
+		}
+
 		async function loadSlaves() {
 			try {
 				const resp = await fetch('/api/slaves');
@@ -103,6 +119,25 @@
 			}
 		}
 
+		async function loadLogs() {
+			try {
+				const resp = await fetch('/api/logs');
+				if (resp.status === 401) return;
+				const data = await resp.json();
+				const tbody = document.querySelector('#logs tbody');
+				tbody.innerHTML = '';
+				for (const log of data.logs) {
+					const tr = document.createElement('tr');
+					const connected = formatTime(log.connected_at);
+					const disconnected = log.disconnected_at ? formatTime(log.disconnected_at) : 'Connected';
+					tr.innerHTML = `<td>${log.id}</td><td>${connected}</td><td>${disconnected}</td>`;
+					tbody.appendChild(tr);
+				}
+			} catch (e) {
+				console.error(e);
+			}
+		}
+
 		async function kick(slaveId) {
 			if (!confirm('Kick slave ' + slaveId + '?')) return;
 			await fetch('/api/slaves/' + slaveId + '/kick', {method: 'POST'});
@@ -115,6 +150,7 @@
 		}
 
 		loadSlaves();
+		loadLogs();
 	</script>
 </body>
 

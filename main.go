@@ -16,6 +16,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
+
+	db "websocket-relay/db"
 )
 
 //go:embed static/*
@@ -104,6 +106,8 @@ func (rel *Relay) HandleSlave(conn *websocket.Conn) {
 	rel.slaves[s.ID] = s
 	rel.mu.Unlock()
 
+	db.LogSlaveConnected(id)
+
 	// Send ID to slave immediately
 	s.Conn.WriteMessage(websocket.TextMessage, []byte(s.ID))
 
@@ -127,11 +131,16 @@ func (rel *Relay) RemoveSlave(id string) {
 	rel.mu.Lock()
 	defer rel.mu.Unlock()
 	if s, ok := rel.slaves[id]; ok {
+		// TODO: Close the connection properly.
+		// Write a control message, then wait for the client to acknowledge.
+
 		s.Conn.Close()
 		delete(rel.slaves, id)
 		if rel.masterTarget == id && rel.master != nil {
 			rel.master.Close()
 		}
+
+		db.LogSlaveDisconnected(id)
 	}
 }
 
@@ -167,6 +176,14 @@ func NewWebServer(relay *Relay) *WebServer {
 func main() {
 	_ = godotenv.Load()
 
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL != "" {
+		if err := db.Connect(dbURL); err != nil {
+			log.Printf("Failed to connect to database: %v", err)
+		}
+		defer db.Close()
+	}
+
 	relay := NewRelay()
 	server := NewWebServer(relay)
 
@@ -186,6 +203,7 @@ func main() {
 	mux.HandleFunc("POST /api/logout", server.handleLogout)
 	mux.HandleFunc("GET /api/slaves", server.authMiddleware(server.handleListSlaves))
 	mux.HandleFunc("POST /api/slaves/{id}/kick", server.authMiddleware(server.handleKickSlave))
+	mux.HandleFunc("GET /api/logs", server.authMiddleware(server.handleLogs))
 
 	loggedMux := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +339,17 @@ func (server *WebServer) handleKickSlave(w http.ResponseWriter, r *http.Request)
 	server.relay.RemoveSlave(id)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"kicked"}`))
+}
+
+func (server *WebServer) handleLogs(w http.ResponseWriter, r *http.Request) {
+	logs, err := db.GetLogs()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string][]db.LogEntry{"logs": logs})
 }
 
 // --- Relay Logic ---
