@@ -69,11 +69,26 @@ func LogSlaveDisconnected(id string) error {
 	return nil
 }
 
-func GetLogs() ([]LogEntry, error) {
+func GetLogs(since *time.Time) ([]LogEntry, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("database not connected")
 	}
-	rows, err := DB.Query("SELECT id, connected_at, disconnected_at FROM slave_logs ORDER BY connected_at DESC LIMIT 100")
+
+	var rows *sql.Rows
+	var err error
+
+	if since != nil {
+		// NOTE: SQLite stores timestamps in the time.DateTime format, but the driver returns them as RFC3339 in results.
+		//       For comparison against stored values, we must use time.DateTime format.
+		rows, err = DB.Query(
+			"SELECT id, connected_at, disconnected_at FROM slave_logs WHERE disconnected_at IS NULL OR disconnected_at >= ? ORDER BY disconnected_at IS NULL DESC, disconnected_at DESC, connected_at DESC LIMIT 100",
+			since.Format(time.DateTime),
+		)
+	} else {
+		rows, err = DB.Query(
+			"SELECT id, connected_at, disconnected_at FROM slave_logs ORDER BY disconnected_at IS NULL DESC, disconnected_at DESC, connected_at DESC LIMIT 100",
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

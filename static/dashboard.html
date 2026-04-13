@@ -31,6 +31,10 @@
 			background: #0056b3;
 		}
 
+		select {
+			padding: 10px;
+		}
+
 		.logout {
 			background: #6c757d;
 		}
@@ -84,6 +88,14 @@
 	</table>
 
 	<h2>Connection Logs</h2>
+	<div>
+		<select id="period" onchange="setPeriod(this.value)">
+			<option value="">All</option>
+			<option value="1h">1 hour</option>
+			<option value="1d">1 day</option>
+			<option value="7d">7 days</option>
+		</select>
+	</div>
 	<table id="logs">
 		<thead>
 			<tr>
@@ -95,8 +107,25 @@
 		<tbody></tbody>
 	</table>
 	<script>
+		let currentSince = '';
+
 		function formatTime(isoString) {
 			return new Date(isoString).toLocaleString();
+		}
+
+		function setPeriod(period) {
+			if (!period) {
+				currentSince = '';
+			} else {
+				const since = new Date();
+				switch (period) {
+					case '1h': since.setHours(since.getHours() - 1); break;
+					case '1d': since.setDate(since.getDate() - 1); break;
+					case '7d': since.setDate(since.getDate() - 7); break;
+				}
+				currentSince = since.toISOString();
+			}
+			loadLogs();
 		}
 
 		async function loadSlaves() {
@@ -121,7 +150,8 @@
 
 		async function loadLogs() {
 			try {
-				const resp = await fetch('/api/logs');
+				const url = currentSince ? `/api/logs?since=${encodeURIComponent(currentSince)}` : '/api/logs';
+				const resp = await fetch(url);
 				if (resp.status === 401) return;
 				const data = await resp.json();
 				const tbody = document.querySelector('#logs tbody');

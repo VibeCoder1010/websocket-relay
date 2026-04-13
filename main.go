@@ -342,7 +342,17 @@ func (server *WebServer) handleKickSlave(w http.ResponseWriter, r *http.Request)
 }
 
 func (server *WebServer) handleLogs(w http.ResponseWriter, r *http.Request) {
-	logs, err := db.GetLogs()
+	queryParams := r.URL.Query()
+
+	var since *time.Time
+	if sinceStr := queryParams.Get("since"); sinceStr != "" {
+		t, err := time.Parse(time.RFC3339, sinceStr)
+		if err == nil {
+			since = &t
+		}
+	}
+
+	logs, err := db.GetLogs(since)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
